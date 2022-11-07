@@ -11,6 +11,9 @@
 
 Add notes from the video (PRs are welcome)
 
+* after testing the docker image locally, take the docker image to the cloud
+* the elastic container registry (ECR) on amazon
+* prices of cloud services
 
 <table>
    <tr>
