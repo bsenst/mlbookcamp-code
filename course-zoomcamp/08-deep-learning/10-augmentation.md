@@ -12,6 +12,13 @@ I used `train_gen`. That's why adding augmentations didn't help in the video.
 
 Add notes from the video (PRs are welcome)
 
+* augmentation as an alternative to dropout
+* generate variations of the existing images
+* flip vertically or horizontally
+* rotate
+* shift
+* shear
+* shrink and zoom
 
 <table>
    <tr>
