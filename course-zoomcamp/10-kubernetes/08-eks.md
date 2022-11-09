@@ -7,6 +7,10 @@
 
 Add notes from the video (PRs are welcome)
 
+* pricing, eks cluster (Amazon Elastic Kubernetes Service) is not covered by the free tier
+* sending a request to the entry point, which acts as load balancer
+* forward to the internal service, finally return response
+* ec2 instances (Amazon Elastic Compute Cloud)
 
 <table>
    <tr>
