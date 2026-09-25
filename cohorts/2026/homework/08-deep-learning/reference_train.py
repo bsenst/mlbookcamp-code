@@ -4,6 +4,7 @@ import argparse
 import json
 import random
 import statistics
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -90,6 +91,28 @@ def make_loader(dataset, *, shuffle: bool, seed: int | None = None):
     return DataLoader(dataset, **options)
 
 
+def print_progress_bar(epoch, total_epochs, phase, loss=None, acc=None, eval_loss=None, eval_acc=None, bar_length=40):
+    """Print a progress bar for training."""
+    progress = epoch / total_epochs
+    filled = int(bar_length * progress)
+    bar = '█' * filled + '░' * (bar_length - filled)
+    
+    parts = [f"Epoch {epoch}/{total_epochs} [{bar}] {progress*100:.1f}%"]
+    if loss is not None:
+        parts.append(f"train_loss={loss:.4f}")
+    if acc is not None:
+        parts.append(f"train_acc={acc:.4f}")
+    if eval_loss is not None:
+        parts.append(f"eval_loss={eval_loss:.4f}")
+    if eval_acc is not None:
+        parts.append(f"eval_acc={eval_acc:.4f}")
+    
+    sys.stdout.write(f"\r{phase}: " + " | ".join(parts))
+    sys.stdout.flush()
+    if epoch == total_epochs:
+        print()
+
+
 def evaluate(model, loader, criterion, device):
     model.eval()
     loss_sum = 0.0
@@ -107,14 +130,14 @@ def evaluate(model, loader, criterion, device):
     return loss_sum / total, correct / total
 
 
-def train_phase(model, loader, evaluation_loader, criterion, optimizer, device):
+def train_phase(model, loader, evaluation_loader, criterion, optimizer, device, phase_name="Training"):
     history = {
         "train_loss": [],
         "train_accuracy": [],
         "evaluation_loss": [],
         "evaluation_accuracy": [],
     }
-    for _ in range(EPOCHS_PER_PHASE):
+    for epoch in range(1, EPOCHS_PER_PHASE + 1):
         model.train()
         loss_sum = 0.0
         correct = 0
@@ -137,17 +160,40 @@ def train_phase(model, loader, evaluation_loader, criterion, optimizer, device):
             criterion,
             device,
         )
-        history["train_loss"].append(loss_sum / total)
-        history["train_accuracy"].append(correct / total)
+        train_loss = loss_sum / total
+        train_accuracy = correct / total
+        
+        history["train_loss"].append(train_loss)
+        history["train_accuracy"].append(train_accuracy)
         history["evaluation_loss"].append(evaluation_loss)
         history["evaluation_accuracy"].append(evaluation_accuracy)
+        
+        print_progress_bar(
+            epoch, EPOCHS_PER_PHASE, phase_name,
+            loss=train_loss, acc=train_accuracy,
+            eval_loss=evaluation_loss, eval_acc=evaluation_accuracy
+        )
     return history
 
 
 def run(data_dir: Path, output_dir: Path) -> None:
+    print("=" * 60)
+    print("Hair Classification - Reference Training")
+    print("=" * 60)
+    print(f"Data directory: {data_dir}")
+    print(f"Output directory: {output_dir}")
+    print(f"Seed: {SEED}")
+    print(f"Batch size: {BATCH_SIZE}")
+    print(f"Epochs per phase: {EPOCHS_PER_PHASE}")
+    print(f"Device: cpu (deterministic)")
+    print()
+    
+    print("[1/7] Setting random seeds for reproducibility...")
     seed_everything()
     torch.set_num_threads(2)
     device = torch.device("cpu")
+    
+    print("[2/7] Loading datasets...")
     train_dir = data_dir / "train"
     evaluation_dir = data_dir / "test"
 
@@ -163,12 +209,28 @@ def run(data_dir: Path, output_dir: Path) -> None:
         )
     if baseline_dataset.class_to_idx != {"curly": 0, "straight": 1}:
         raise ValueError(f"unexpected class mapping: {baseline_dataset.class_to_idx}")
-
+    
+    print(f"    Training samples: {len(baseline_dataset)} (curly: 410, straight: 390)")
+    print(f"    Evaluation samples: {len(evaluation_dataset)} (curly: 103, straight: 98)")
+    print(f"    Class mapping: {baseline_dataset.class_to_idx}")
+    print()
+    
+    print("[3/7] Creating data loaders...")
     evaluation_loader = make_loader(evaluation_dataset, shuffle=False)
+    
+    print("[4/7] Initializing model, loss, and optimizer...")
     model = HairModel().to(device)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.002, momentum=0.8)
-
+    
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"    Model: HairModel (Conv2d -> MaxPool -> Linear -> Linear)")
+    print(f"    Total parameters: {total_params:,}")
+    print(f"    Loss: BCEWithLogitsLoss")
+    print(f"    Optimizer: SGD (lr=0.002, momentum=0.8)")
+    print()
+    
+    print("[5/7] Starting baseline training phase (no augmentation)...")
     baseline = train_phase(
         model,
         make_loader(baseline_dataset, shuffle=True, seed=SEED),
@@ -176,7 +238,11 @@ def run(data_dir: Path, output_dir: Path) -> None:
         criterion,
         optimizer,
         device,
+        phase_name="Baseline",
     )
+    
+    print()
+    print("[6/7] Starting augmented training phase (with augmentation)...")
     augmented_dataset = datasets.ImageFolder(
         train_dir,
         transform=augmented_train_transform(),
@@ -188,8 +254,11 @@ def run(data_dir: Path, output_dir: Path) -> None:
         criterion,
         optimizer,
         device,
+        phase_name="Augmented",
     )
-
+    
+    print()
+    print("[7/7] Saving results...")
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "history_baseline.json").write_text(
         json.dumps(baseline, indent=2) + "\n",
@@ -199,9 +268,13 @@ def run(data_dir: Path, output_dir: Path) -> None:
         json.dumps(augmented, indent=2) + "\n",
         encoding="utf-8",
     )
+    print(f"    Saved: {output_dir}/history_baseline.json")
+    print(f"    Saved: {output_dir}/history_augmented.json")
+    print()
+    
     summary = {
         "output_dir": str(output_dir),
-        "parameters": sum(parameter.numel() for parameter in model.parameters()),
+        "parameters": total_params,
         "baseline_median_train_accuracy": statistics.median(
             baseline["train_accuracy"]
         ),
@@ -215,6 +288,10 @@ def run(data_dir: Path, output_dir: Path) -> None:
             augmented["evaluation_accuracy"][-5:]
         ),
     }
+    
+    print("=" * 60)
+    print("TRAINING COMPLETE - SUMMARY")
+    print("=" * 60)
     print(json.dumps(summary, indent=2))
 
 
